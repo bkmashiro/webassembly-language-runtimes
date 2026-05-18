@@ -162,6 +162,7 @@ jobs:
             -Wl,--export=dealloc \
             -Wl,--export=resp_buf \
             -Wl,--export=resp_len \
+            -Wl,-z,stack-size=2097152 \
             -o python-reactor-nostdlib.wasm
 
       # ── Pack stdlib + numpy pure Python ──────────────────────────────────
