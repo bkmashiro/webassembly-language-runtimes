@@ -163,7 +163,7 @@ jobs:
 
       - name: Pack stdlib and numpy with wasi-vfs
         run: |
-          STDLIB_DIR="${CPYTHON_WASI}/lib/python3.14"
+          STDLIB_DIR="${CPYTHON_WASI}/lib"
           echo "Stdlib dir: ${STDLIB_DIR}"
           test -d "${STDLIB_DIR}" || (echo "ERROR: stdlib not found"; find cpython-wasi -type d | head -20; exit 1)
 
