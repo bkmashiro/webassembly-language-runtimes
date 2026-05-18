@@ -89,16 +89,27 @@ jobs:
           echo "Library: ${LIBPY}"
           test -f "${LIBPY}" || (echo "ERROR: libpython3.12.a not found"; find libpython -name "*.a"; exit 1)
 
-          # Read linker flags from pkg-config file
-          PC_LIBS=$(grep "^Libs:" libpython/lib/wasm32-wasi/pkgconfig/*.pc 2>/dev/null | sed 's/^Libs://' | tr -d '\r')
-          echo "Libs from .pc: ${PC_LIBS}"
+          # Extract only -Wl,... flags from pkg-config (skip -L/${libdir} and -lpython3.12
+          # which we provide explicitly as a full path, to avoid unexpanded variables).
+          PC_WL=$(grep "^Libs:" libpython/lib/wasm32-wasi/pkgconfig/*.pc 2>/dev/null \
+            | sed 's/^Libs://' \
+            | grep -oE '\-Wl,[^ ]+' \
+            | tr '\n' ' ')
+          echo "Wl flags from .pc: ${PC_WL}"
+
+          # wasi-emulated-* libs are in WASI SDK sysroot
+          SYSROOT="${WASI_SDK}/share/wasi-sysroot"
 
           ${WASI_SDK}/bin/clang \
             --target=wasm32-wasi \
+            --sysroot="${SYSROOT}" \
             -mexec-model=reactor \
             py_reactor.o \
             "${LIBPY}" \
-            ${PC_LIBS} \
+            ${PC_WL} \
+            -lwasi-emulated-getpid \
+            -lwasi-emulated-signal \
+            -lwasi-emulated-process-clocks \
             -Wl,--export=py_init \
             -Wl,--export=py_exec \
             -Wl,--export=alloc \
