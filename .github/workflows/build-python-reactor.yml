@@ -127,8 +127,9 @@ jobs:
           echo "Stdlib usr dir: ${USR_DIR}"
           test -d "${USR_DIR}" || (echo "ERROR: usr/ not found"; find libpython -type d; exit 1)
 
+          # wasi-vfs ≥0.5: --dir HOST_DIR::GUEST_DIR (order changed from old --mapdir)
           wasi-vfs pack python-reactor-nostdlib.wasm \
-            --mapdir /usr::${USR_DIR} \
+            --dir "${USR_DIR}"::/usr \
             -o python-reactor.wasm
 
           ls -lh python-reactor.wasm
