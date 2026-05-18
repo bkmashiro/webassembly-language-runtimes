@@ -63,7 +63,7 @@ jobs:
         run: |
           BASE_URL=$(curl -fsSL \
             -H "Authorization: token ${{ secrets.WASI_WHEELS_TOKEN || github.token }}" \
-            "https://api.github.com/repos/bkmashiro/wasi-wheels/releases/latest" \
+            "https://api.github.com/repos/bkmashiro/wasi-wheels/releases/tags/latest" \
             | python3 -c "import json,sys; assets=json.load(sys.stdin)['assets']; url=[a['browser_download_url'] for a in assets if a['name']=='cpython-3.14-wasi.tar.gz']; print(url[0] if url else '')")
           if [ -z "$BASE_URL" ]; then
             echo "ERROR: cpython-3.14-wasi.tar.gz not found in wasi-wheels latest release"
@@ -79,7 +79,7 @@ jobs:
         run: |
           BASE_URL=$(curl -fsSL \
             -H "Authorization: token ${{ secrets.WASI_WHEELS_TOKEN || github.token }}" \
-            "https://api.github.com/repos/bkmashiro/wasi-wheels/releases/latest" \
+            "https://api.github.com/repos/bkmashiro/wasi-wheels/releases/tags/latest" \
             | python3 -c "import json,sys; assets=json.load(sys.stdin)['assets']; url=[a['browser_download_url'] for a in assets if a['name']=='numpy-static-wasi.tar.gz']; print(url[0] if url else '')")
           if [ -z "$BASE_URL" ]; then
             echo "ERROR: numpy-static-wasi.tar.gz not found in wasi-wheels latest release"
