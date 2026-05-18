@@ -1,15 +1,18 @@
 # .github/workflows/build-python-reactor.yml
 #
-# Builds python-reactor.wasm — reactor-mode CPython 3.12 for shimmy-wasm.
+# Builds python-reactor.wasm — reactor-mode CPython 3.14 for shimmy-wasm.
 #
 # Exports: py_init, py_exec, alloc, dealloc, resp_buf, resp_len
 #
-# Strategy (~10 min):
-#   • Download pre-built libpython-3.12.0-wasi-sdk-20.0.tar.gz from vmware-labs
-#     (contains headers, libpython3.12.a, and stdlib in usr/).
-#   • Compile py_reactor.c with WASI SDK 20.
-#   • Link with -mexec-model=reactor against libpython3.12.a.
-#   • Pack Python stdlib into the binary with wasi-vfs (same as current aio build).
+# Strategy:
+#   • Download pre-built cpython-3.14-wasi.tar.gz from bkmashiro/wasi-wheels
+#     latest release (contains libpython3.14.a, headers, and stdlib).
+#   • Download pre-built numpy-static-wasi.tar.gz from bkmashiro/wasi-wheels
+#     latest release (contains numpy .a archives + pure Python files).
+#   • Download WASI SDK 33.
+#   • Compile py_reactor.c with -DHAVE_NUMPY against CPython 3.14 headers.
+#   • Link with -mexec-model=reactor against libpython3.14.a + numpy .a files.
+#   • Pack Python 3.14 stdlib + numpy pure Python into binary with wasi-vfs.
 
 name: Build python-reactor.wasm
 
@@ -22,7 +25,7 @@ on:
 
 jobs:
   build:
-    name: python-reactor.wasm (WASI SDK 20)
+    name: python-reactor.wasm (CPython 3.14 + WASI SDK 33 + numpy)
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -32,12 +35,14 @@ jobs:
 
       # ── Toolchain ────────────────────────────────────────────────────────
 
-      - name: Install WASI SDK 20
+      - name: Install WASI SDK 33
         run: |
-          URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-20/wasi-sdk-20.0-linux.tar.gz"
+          HOST_ARCH=$(uname -m | sed -e 's/aarch64/arm64/')
+          URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-${HOST_ARCH}-linux.tar.gz"
           wget -q "$URL" -O wasi-sdk.tar.gz
           tar xf wasi-sdk.tar.gz
-          echo "WASI_SDK=$(pwd)/wasi-sdk-20.0" >> $GITHUB_ENV
+          mv wasi-sdk-33.0-${HOST_ARCH}-linux wasi-sdk-33
+          echo "WASI_SDK=$(pwd)/wasi-sdk-33" >> $GITHUB_ENV
 
       - name: Install wasi-vfs 0.6.3
         run: |
@@ -52,67 +57,88 @@ jobs:
           unzip -q libwasi_vfs.zip
           echo "WASI_VFS_LIB=$(pwd)/libwasi_vfs.a" >> $GITHUB_ENV
 
-      # ── Download pre-built libpython ──────────────────────────────────
+      # ── Download pre-built artifacts from wasi-wheels latest release ─────
 
-      - name: Download libpython-3.12.0-wasi-sdk-20.0
+      - name: Download cpython-3.14-wasi.tar.gz from wasi-wheels
         run: |
-          BASE="https://github.com/vmware-labs/webassembly-language-runtimes/releases/download/python%2F3.12.0%2B20231211-040d5a6"
-          wget -q "${BASE}/libpython-3.12.0-wasi-sdk-20.0.tar.gz"
-          mkdir -p libpython
-          tar xf libpython-3.12.0-wasi-sdk-20.0.tar.gz -C libpython
+          BASE_URL=$(curl -fsSL \
+            -H "Authorization: token ${{ secrets.WASI_WHEELS_TOKEN || github.token }}" \
+            "https://api.github.com/repos/bkmashiro/wasi-wheels/releases/latest" \
+            | python3 -c "import json,sys; assets=json.load(sys.stdin)['assets']; url=[a['browser_download_url'] for a in assets if a['name']=='cpython-3.14-wasi.tar.gz']; print(url[0] if url else '')")
+          if [ -z "$BASE_URL" ]; then
+            echo "ERROR: cpython-3.14-wasi.tar.gz not found in wasi-wheels latest release"
+            exit 1
+          fi
+          echo "Downloading: $BASE_URL"
+          wget -q "$BASE_URL" -O cpython-3.14-wasi.tar.gz
+          mkdir -p cpython-wasi
+          tar xf cpython-3.14-wasi.tar.gz -C cpython-wasi --strip-components=1
+          echo "CPYTHON_WASI=$(pwd)/cpython-wasi" >> $GITHUB_ENV
 
-      - name: Inspect archive layout and read pkg-config
+      - name: Download numpy-static-wasi.tar.gz from wasi-wheels
         run: |
-          echo "=== tree (depth 4) ==="
-          find libpython -maxdepth 4
+          BASE_URL=$(curl -fsSL \
+            -H "Authorization: token ${{ secrets.WASI_WHEELS_TOKEN || github.token }}" \
+            "https://api.github.com/repos/bkmashiro/wasi-wheels/releases/latest" \
+            | python3 -c "import json,sys; assets=json.load(sys.stdin)['assets']; url=[a['browser_download_url'] for a in assets if a['name']=='numpy-static-wasi.tar.gz']; print(url[0] if url else '')")
+          if [ -z "$BASE_URL" ]; then
+            echo "ERROR: numpy-static-wasi.tar.gz not found in wasi-wheels latest release"
+            exit 1
+          fi
+          echo "Downloading: $BASE_URL"
+          wget -q "$BASE_URL" -O numpy-static-wasi.tar.gz
+          mkdir -p numpy-static
+          tar xf numpy-static-wasi.tar.gz -C numpy-static --strip-components=1
+          echo "NUMPY_STATIC=$(pwd)/numpy-static" >> $GITHUB_ENV
+
+      - name: Inspect layout
+        run: |
+          echo "=== cpython-wasi layout (depth 3) ==="
+          find cpython-wasi -maxdepth 3 -type f | sort | head -40
           echo ""
-          echo "=== pkg-config ==="
-          find libpython -name "*.pc" -exec cat {} \;
+          echo "=== numpy-static layout (depth 4) ==="
+          find numpy-static -maxdepth 4 | sort | head -40
 
-      # ── Compile ───────────────────────────────────────────────────────
+      # ── Compile ───────────────────────────────────────────────────────────
 
       - name: Compile py_reactor.c
         run: |
-          INCLUDE="$(pwd)/libpython/include/python3.12"
+          INCLUDE="${CPYTHON_WASI}/include/python3.14"
           echo "Include dir: ${INCLUDE}"
-          test -f "${INCLUDE}/Python.h" || (echo "ERROR: Python.h not found"; exit 1)
+          test -f "${INCLUDE}/Python.h" || (echo "ERROR: Python.h not found"; find cpython-wasi -name "Python.h"; exit 1)
 
           ${WASI_SDK}/bin/clang \
-            --target=wasm32-wasi \
+            --target=wasm32-wasip1 \
             -I "${INCLUDE}" \
+            -DHAVE_NUMPY \
             -O2 \
             -Wall \
             -Wno-unused-command-line-argument \
             -c python/reactor/py_reactor.c \
             -o py_reactor.o
 
-      # ── Link ─────────────────────────────────────────────────────────
+      # ── Link ──────────────────────────────────────────────────────────────
 
       - name: Link python-reactor-nostdlib.wasm
         run: |
-          LIBPY="$(pwd)/libpython/lib/wasm32-wasi/libpython3.12.a"
+          LIBPY="${CPYTHON_WASI}/libpython3.14.a"
           echo "Library: ${LIBPY}"
-          test -f "${LIBPY}" || (echo "ERROR: libpython3.12.a not found"; find libpython -name "*.a"; exit 1)
+          test -f "${LIBPY}" || (echo "ERROR: libpython3.14.a not found"; find cpython-wasi -name "*.a"; exit 1)
 
-          # Extract only -Wl,... flags from pkg-config (skip -L/${libdir} and -lpython3.12
-          # which we provide explicitly as a full path, to avoid unexpanded variables).
-          PC_WL=$(grep "^Libs:" libpython/lib/wasm32-wasi/pkgconfig/*.pc 2>/dev/null \
-            | sed 's/^Libs://' \
-            | grep -oE '\-Wl,[^ ]+' \
-            | tr '\n' ' ')
-          echo "Wl flags from .pc: ${PC_WL}"
+          # Collect all numpy .a files
+          NUMPY_LIBS=$(find "${NUMPY_STATIC}" -name "*.a" | sort | tr '\n' ' ')
+          echo "numpy .a files: ${NUMPY_LIBS}"
 
-          # wasi-emulated-* libs are in WASI SDK sysroot
           SYSROOT="${WASI_SDK}/share/wasi-sysroot"
 
           ${WASI_SDK}/bin/clang \
-            --target=wasm32-wasi \
+            --target=wasm32-wasip1 \
             --sysroot="${SYSROOT}" \
             -mexec-model=reactor \
             py_reactor.o \
             "${LIBPY}" \
+            ${NUMPY_LIBS} \
             "${WASI_VFS_LIB}" \
-            ${PC_WL} \
             -lwasi-emulated-getpid \
             -lwasi-emulated-signal \
             -lwasi-emulated-process-clocks \
@@ -124,23 +150,31 @@ jobs:
             -Wl,--export=resp_len \
             -o python-reactor-nostdlib.wasm
 
-      # ── Pack stdlib ───────────────────────────────────────────────────
+      # ── Pack stdlib + numpy pure Python ──────────────────────────────────
 
-      - name: Pack stdlib with wasi-vfs
+      - name: Pack stdlib and numpy with wasi-vfs
         run: |
-          # The libpython archive includes usr/ (Python stdlib as python312.zip)
-          USR_DIR="$(pwd)/libpython/usr"
-          echo "Stdlib usr dir: ${USR_DIR}"
-          test -d "${USR_DIR}" || (echo "ERROR: usr/ not found"; find libpython -type d; exit 1)
+          STDLIB_DIR="${CPYTHON_WASI}/lib/python3.14"
+          echo "Stdlib dir: ${STDLIB_DIR}"
+          test -d "${STDLIB_DIR}" || (echo "ERROR: stdlib not found"; find cpython-wasi -type d | head -20; exit 1)
 
-          # wasi-vfs ≥0.5: --dir HOST_DIR::GUEST_DIR (order changed from old --mapdir)
+          NUMPY_PY_DIR="${NUMPY_STATIC}/numpy"
+          echo "Numpy pure Python dir: ${NUMPY_PY_DIR}"
+          test -d "${NUMPY_PY_DIR}" || (echo "ERROR: numpy pure Python not found"; find numpy-static -type d; exit 1)
+
+          # Build site-packages dir with numpy
+          mkdir -p /tmp/site-packages
+          cp -a "${NUMPY_PY_DIR}" /tmp/site-packages/numpy
+
+          # wasi-vfs pack: stdlib at /usr/lib/python3.14, numpy at /usr/lib/python3.14/site-packages/numpy
           wasi-vfs pack python-reactor-nostdlib.wasm \
-            --dir "${USR_DIR}"::/usr \
+            --dir "${STDLIB_DIR}"::/usr/lib/python3.14 \
+            --dir /tmp/site-packages/numpy::/usr/lib/python3.14/site-packages/numpy \
             -o python-reactor.wasm
 
           ls -lh python-reactor.wasm
 
-      # ── Verify exports ────────────────────────────────────────────────
+      # ── Verify exports ────────────────────────────────────────────────────
 
       - name: Verify WASM exports
         run: |
@@ -158,7 +192,7 @@ jobs:
           print('All exports present.')
           "
 
-      # ── Upload ────────────────────────────────────────────────────────
+      # ── Upload ────────────────────────────────────────────────────────────
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -174,9 +208,10 @@ jobs:
           files: python-reactor.wasm
           name: ${{ github.ref_name }}
           body: |
-            Reactor-mode CPython 3.12 WASM binary.
+            Reactor-mode CPython 3.14 WASM binary with numpy built-in.
 
             Exports: `py_init`, `py_exec`, `alloc`, `dealloc`, `resp_buf`, `resp_len`
 
-            Built from vmware-labs/webassembly-language-runtimes python/3.12.0+20231211-040d5a6
-            with py_reactor.c, linked -mexec-model=reactor, stdlib packed via wasi-vfs.
+            Built from CPython 3.14 + WASI SDK 33 + numpy static archives.
+            NumPy C extensions are linked statically (no dynamic linking required).
+            Stdlib and numpy pure Python are packed via wasi-vfs.
