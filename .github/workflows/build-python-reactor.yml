@@ -103,7 +103,7 @@ jobs:
 
       - name: Compile py_reactor.c
         run: |
-          INCLUDE="${CPYTHON_WASI}/include/python3.14"
+          INCLUDE="${CPYTHON_WASI}/include"
           echo "Include dir: ${INCLUDE}"
           test -f "${INCLUDE}/Python.h" || (echo "ERROR: Python.h not found"; find cpython-wasi -name "Python.h"; exit 1)
 
@@ -154,7 +154,7 @@ jobs:
 
       - name: Pack stdlib and numpy with wasi-vfs
         run: |
-          STDLIB_DIR="${CPYTHON_WASI}/lib/python3.14"
+          STDLIB_DIR="${CPYTHON_WASI}/lib"
           echo "Stdlib dir: ${STDLIB_DIR}"
           test -d "${STDLIB_DIR}" || (echo "ERROR: stdlib not found"; find cpython-wasi -type d | head -20; exit 1)
 
