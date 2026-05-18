@@ -75,13 +75,19 @@ jobs:
 
       - name: Locate build artifacts
         run: |
+          echo "=== libpython tree ==="
+          find "${LIBPYTHON}" | head -60
+          echo "=== python-dist tree ==="
+          find "${PYTHON_DIST}" -maxdepth 4 | head -40
+
           PYTHON_H=$(find "${LIBPYTHON}" -name "Python.h" | head -1)
           echo "Python.h: ${PYTHON_H}"
           INCLUDE_DIR=$(dirname "${PYTHON_H}")
           echo "PYTHON_INCLUDE=${INCLUDE_DIR}" >> $GITHUB_ENV
 
-          LIBPYTHON_A=$(find "${LIBPYTHON}" -name "libpython3.12-aio.a" | head -1)
-          echo "libpython3.12-aio.a: ${LIBPYTHON_A}"
+          # Try both possible names for the combined static lib
+          LIBPYTHON_A=$(find "${LIBPYTHON}" -name "libpython*.a" | head -1)
+          echo "libpython .a: ${LIBPYTHON_A}"
           echo "LIBPYTHON_A=${LIBPYTHON_A}" >> $GITHUB_ENV
 
           # The stdlib should be under a usr/ subtree
