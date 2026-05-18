@@ -1,17 +1,15 @@
 # .github/workflows/build-python-reactor.yml
 #
-# Builds python-reactor.wasm — a reactor-mode CPython 3.12 WASM binary that
-# exposes py_init / py_exec / alloc / dealloc / resp_buf / resp_len exports
-# instead of the command-mode _start entry point.
+# Builds python-reactor.wasm — reactor-mode CPython 3.12 for shimmy-wasm.
 #
-# Strategy (fast, ~10 min total):
-#   • Download pre-built libpython 3.12.0 artifacts from the vmware-labs
-#     release (saves ~40 min of CPython compilation).
-#   • Compile only py_reactor.c with WASI SDK 20.
-#   • Link against libpython3.12-aio.a.
-#   • Pack the Python stdlib into the binary with wasi-vfs (same as the
-#     existing python-3.12.0.wasm "aio" build).
-#   • Upload as a workflow artifact and optionally cut a release.
+# Exports: py_init, py_exec, alloc, dealloc, resp_buf, resp_len
+#
+# Strategy (~10 min):
+#   • Download pre-built libpython-3.12.0-wasi-sdk-20.0.tar.gz from vmware-labs
+#     (contains headers, libpython3.12.a, and stdlib in usr/).
+#   • Compile py_reactor.c with WASI SDK 20.
+#   • Link with -mexec-model=reactor against libpython3.12.a.
+#   • Pack Python stdlib into the binary with wasi-vfs (same as current aio build).
 
 name: Build python-reactor.wasm
 
@@ -28,103 +26,79 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    env:
-      WASI_SDK_VERSION: "20"
-      LIBPYTHON_RELEASE: "python/3.12.0%2B20231211-040d5a6"
-      LIBPYTHON_RELEASE_BASE: "https://github.com/vmware-labs/webassembly-language-runtimes/releases/download"
-      WASI_VFS_VERSION: "0.6.3"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       # ── Toolchain ────────────────────────────────────────────────────────
 
-      - name: Install WASI SDK ${{ env.WASI_SDK_VERSION }}
+      - name: Install WASI SDK 20
         run: |
-          URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-linux.tar.gz"
+          URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-20/wasi-sdk-20.0-linux.tar.gz"
           wget -q "$URL" -O wasi-sdk.tar.gz
           tar xf wasi-sdk.tar.gz
-          echo "WASI_SDK=$(pwd)/wasi-sdk-${WASI_SDK_VERSION}.0" >> $GITHUB_ENV
+          echo "WASI_SDK=$(pwd)/wasi-sdk-20.0" >> $GITHUB_ENV
 
-      - name: Install wasi-vfs ${{ env.WASI_VFS_VERSION }}
+      - name: Install wasi-vfs 0.6.3
         run: |
-          URL="https://github.com/kateinoigakukun/wasi-vfs/releases/download/v${WASI_VFS_VERSION}/wasi-vfs-cli-x86_64-unknown-linux-gnu.zip"
+          URL="https://github.com/kateinoigakukun/wasi-vfs/releases/download/v0.6.3/wasi-vfs-cli-x86_64-unknown-linux-gnu.zip"
           wget -q "$URL" -O wasi-vfs.zip
           unzip -q wasi-vfs.zip
           chmod +x wasi-vfs
           echo "$(pwd)" >> $GITHUB_PATH
 
-      # ── Pre-built libpython artifacts ─────────────────────────────────
+      # ── Download pre-built libpython ──────────────────────────────────
 
-      - name: Download libpython 3.12.0 (headers + static lib)
+      - name: Download libpython-3.12.0-wasi-sdk-20.0
         run: |
-          BASE="${LIBPYTHON_RELEASE_BASE}/${LIBPYTHON_RELEASE}"
+          BASE="https://github.com/vmware-labs/webassembly-language-runtimes/releases/download/python%2F3.12.0%2B20231211-040d5a6"
           wget -q "${BASE}/libpython-3.12.0-wasi-sdk-20.0.tar.gz"
           mkdir -p libpython
           tar xf libpython-3.12.0-wasi-sdk-20.0.tar.gz -C libpython
-          echo "LIBPYTHON=$(pwd)/libpython" >> $GITHUB_ENV
 
-      - name: Download Python 3.12.0 stdlib (usr/)
+      - name: Inspect archive layout and read pkg-config
         run: |
-          BASE="${LIBPYTHON_RELEASE_BASE}/${LIBPYTHON_RELEASE}"
-          wget -q "${BASE}/python-3.12.0-wasi-sdk-20.0.tar.gz"
-          mkdir -p python-dist
-          tar xf python-3.12.0-wasi-sdk-20.0.tar.gz -C python-dist
-          echo "PYTHON_DIST=$(pwd)/python-dist" >> $GITHUB_ENV
+          echo "=== tree (depth 4) ==="
+          find libpython -maxdepth 4
+          echo ""
+          echo "=== pkg-config ==="
+          find libpython -name "*.pc" -exec cat {} \;
 
-      - name: Locate build artifacts
-        run: |
-          echo "=== libpython tree ==="
-          find "${LIBPYTHON}" | head -60
-          echo "=== python-dist tree ==="
-          find "${PYTHON_DIST}" -maxdepth 4 | head -40
-
-          PYTHON_H=$(find "${LIBPYTHON}" -name "Python.h" | head -1)
-          echo "Python.h: ${PYTHON_H}"
-          INCLUDE_DIR=$(dirname "${PYTHON_H}")
-          echo "PYTHON_INCLUDE=${INCLUDE_DIR}" >> $GITHUB_ENV
-
-          # Try both possible names for the combined static lib
-          LIBPYTHON_A=$(find "${LIBPYTHON}" -name "libpython*.a" | head -1)
-          echo "libpython .a: ${LIBPYTHON_A}"
-          echo "LIBPYTHON_A=${LIBPYTHON_A}" >> $GITHUB_ENV
-
-          # The stdlib should be under a usr/ subtree
-          USR_DIR=$(find "${PYTHON_DIST}" -type d -name "usr" | head -1)
-          echo "stdlib usr/: ${USR_DIR}"
-          echo "USR_DIR=${USR_DIR}" >> $GITHUB_ENV
-
-      # ── Compile py_reactor.c ─────────────────────────────────────────
+      # ── Compile ───────────────────────────────────────────────────────
 
       - name: Compile py_reactor.c
         run: |
+          INCLUDE="$(pwd)/libpython/include/python3.12"
+          echo "Include dir: ${INCLUDE}"
+          test -f "${INCLUDE}/Python.h" || (echo "ERROR: Python.h not found"; exit 1)
+
           ${WASI_SDK}/bin/clang \
             --target=wasm32-wasi \
-            -mexec-model=reactor \
-            -I "${PYTHON_INCLUDE}" \
-            -I "${PYTHON_INCLUDE}/.." \
+            -I "${INCLUDE}" \
             -O2 \
             -Wall \
-            -Wno-unused-function \
+            -Wno-unused-command-line-argument \
             -c python/reactor/py_reactor.c \
             -o py_reactor.o
 
       # ── Link ─────────────────────────────────────────────────────────
 
-      - name: Link python-reactor.wasm
+      - name: Link python-reactor-nostdlib.wasm
         run: |
+          LIBPY="$(pwd)/libpython/lib/wasm32-wasi/libpython3.12.a"
+          echo "Library: ${LIBPY}"
+          test -f "${LIBPY}" || (echo "ERROR: libpython3.12.a not found"; find libpython -name "*.a"; exit 1)
+
+          # Read linker flags from pkg-config file
+          PC_LIBS=$(grep "^Libs:" libpython/lib/wasm32-wasi/pkgconfig/*.pc 2>/dev/null | sed 's/^Libs://' | tr -d '\r')
+          echo "Libs from .pc: ${PC_LIBS}"
+
           ${WASI_SDK}/bin/clang \
             --target=wasm32-wasi \
             -mexec-model=reactor \
             py_reactor.o \
-            "${LIBPYTHON_A}" \
-            -Wl,-z,stack-size=524288 \
-            -Wl,--stack-first \
-            -Wl,--initial-memory=10485760 \
-            -lwasi-emulated-getpid \
-            -lwasi-emulated-signal \
-            -lwasi-emulated-process-clocks \
+            "${LIBPY}" \
+            ${PC_LIBS} \
             -Wl,--export=py_init \
             -Wl,--export=py_exec \
             -Wl,--export=alloc \
@@ -133,32 +107,40 @@ jobs:
             -Wl,--export=resp_len \
             -o python-reactor-nostdlib.wasm
 
-      # ── Pack stdlib with wasi-vfs ─────────────────────────────────────
+      # ── Pack stdlib ───────────────────────────────────────────────────
 
-      - name: Pack stdlib into reactor.wasm
+      - name: Pack stdlib with wasi-vfs
         run: |
+          # The libpython archive includes usr/ (Python stdlib as python312.zip)
+          USR_DIR="$(pwd)/libpython/usr"
+          echo "Stdlib usr dir: ${USR_DIR}"
+          test -d "${USR_DIR}" || (echo "ERROR: usr/ not found"; find libpython -type d; exit 1)
+
           wasi-vfs pack python-reactor-nostdlib.wasm \
             --mapdir /usr::${USR_DIR} \
             -o python-reactor.wasm
+
           ls -lh python-reactor.wasm
 
-      # ── Verify exports ───────────────────────────────────────────────
+      # ── Verify exports ────────────────────────────────────────────────
 
       - name: Verify WASM exports
         run: |
-          # wasm-objdump is part of WASI SDK
-          ${WASI_SDK}/bin/llvm-objdump -x python-reactor.wasm 2>/dev/null | grep -E "export|py_init|py_exec|alloc|resp_" || \
           python3 -c "
-          import sys
-          data = open('python-reactor.wasm','rb').read()
-          # Simple check: export section should contain our symbol names
+          data = open('python-reactor.wasm', 'rb').read()
+          missing = []
           for sym in [b'py_init', b'py_exec', b'alloc', b'dealloc', b'resp_buf', b'resp_len']:
-              assert sym in data, f'Missing export: {sym}'
-              print(f'  OK: {sym.decode()}')
-          print('All expected exports present.')
+              if sym in data:
+                  print(f'  OK: {sym.decode()}')
+              else:
+                  missing.append(sym.decode())
+          if missing:
+              print(f'MISSING: {missing}')
+              exit(1)
+          print('All exports present.')
           "
 
-      # ── Upload ───────────────────────────────────────────────────────
+      # ── Upload ────────────────────────────────────────────────────────
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -179,4 +161,4 @@ jobs:
             Exports: `py_init`, `py_exec`, `alloc`, `dealloc`, `resp_buf`, `resp_len`
 
             Built from vmware-labs/webassembly-language-runtimes python/3.12.0+20231211-040d5a6
-            with py_reactor.c on top, linked -mexec-model=reactor + wasi-vfs stdlib.
+            with py_reactor.c, linked -mexec-model=reactor, stdlib packed via wasi-vfs.
