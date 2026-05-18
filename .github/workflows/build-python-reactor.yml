@@ -129,6 +129,13 @@ jobs:
           NUMPY_LIBS=$(find "${NUMPY_STATIC}" -name "*.a" | sort | tr '\n' ' ')
           echo "numpy .a files: ${NUMPY_LIBS}"
 
+          # Collect bundled CPython static libs (libmpdec, Hacl, expat) if present
+          EXTRA_LIBS=""
+          if [ -d "${CPYTHON_WASI}/extra-libs" ]; then
+            EXTRA_LIBS=$(find "${CPYTHON_WASI}/extra-libs" -name "*.a" | sort | tr '\n' ' ')
+            echo "extra libs: ${EXTRA_LIBS}"
+          fi
+
           SYSROOT="${WASI_SDK}/share/wasi-sysroot"
 
           ${WASI_SDK}/bin/clang \
@@ -138,10 +145,12 @@ jobs:
             py_reactor.o \
             "${LIBPY}" \
             ${NUMPY_LIBS} \
+            ${EXTRA_LIBS} \
             "${WASI_VFS_LIB}" \
             -lwasi-emulated-getpid \
             -lwasi-emulated-signal \
             -lwasi-emulated-process-clocks \
+            -Wl,--allow-undefined \
             -Wl,--export=py_init \
             -Wl,--export=py_exec \
             -Wl,--export=alloc \
