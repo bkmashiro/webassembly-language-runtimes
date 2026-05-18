@@ -41,11 +41,16 @@ jobs:
 
       - name: Install wasi-vfs 0.6.3
         run: |
-          URL="https://github.com/kateinoigakukun/wasi-vfs/releases/download/v0.6.3/wasi-vfs-cli-x86_64-unknown-linux-gnu.zip"
-          wget -q "$URL" -O wasi-vfs.zip
-          unzip -q wasi-vfs.zip
+          BASE="https://github.com/kateinoigakukun/wasi-vfs/releases/download/v0.6.3"
+          # CLI tool
+          wget -q "${BASE}/wasi-vfs-cli-x86_64-unknown-linux-gnu.zip" -O wasi-vfs-cli.zip
+          unzip -q wasi-vfs-cli.zip
           chmod +x wasi-vfs
           echo "$(pwd)" >> $GITHUB_PATH
+          # Static library (needed at link time to inject wasi_vfs_pack_fs export)
+          wget -q "${BASE}/libwasi_vfs-wasm32-unknown-unknown.zip" -O libwasi_vfs.zip
+          unzip -q libwasi_vfs.zip
+          echo "WASI_VFS_LIB=$(pwd)/libwasi_vfs.a" >> $GITHUB_ENV
 
       # ── Download pre-built libpython ──────────────────────────────────
 
@@ -106,6 +111,7 @@ jobs:
             -mexec-model=reactor \
             py_reactor.o \
             "${LIBPY}" \
+            "${WASI_VFS_LIB}" \
             ${PC_WL} \
             -lwasi-emulated-getpid \
             -lwasi-emulated-signal \
