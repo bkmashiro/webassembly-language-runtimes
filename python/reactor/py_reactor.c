@@ -1,8 +1,8 @@
 /*
- * py_reactor.c – CPython 3.12 WASM reactor exports for shimmy-wasm
+ * py_reactor.c – CPython WASM reactor exports for shimmy-wasm
  *
- * This file is compiled against libpython3.12-aio.a (the pre-built static
- * library from vmware-labs/webassembly-language-runtimes) and linked with
+ * This file is compiled against libpython3.14.a (the static library built from
+ * CPython 3.14 cross-compiled for wasm32-wasip1) and linked with
  * -mexec-model=reactor, producing a WASM module that exposes a callable
  * function interface instead of the traditional command-mode _start.
  *
@@ -60,12 +60,54 @@
  * WASM goroutine is fully unwound back to Go.  Linear memory is the only
  * WASM state; __stack_pointer is at its post-_initialize baseline.  Both
  * can be safely snapshotted and restored without any goroutine conflict.
+ *
+ * NumPy static built-in support
+ * ------------------------------
+ *
+ * When compiled with -DHAVE_NUMPY, numpy's C extension modules are registered
+ * as built-in modules via PyImport_AppendInittab() before Py_Initialize().
+ * This makes numpy importable without dynamic linking (.so files) — the
+ * extension symbols are linked directly into this WASM binary alongside
+ * libpython3.14.a and the numpy static archives (.a files).
  */
 
 #include <Python.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+
+/* ── NumPy built-in module registration ──────────────────────────────────── */
+
+#ifdef HAVE_NUMPY
+/* Forward-declare numpy C extension init functions */
+extern PyObject *PyInit__multiarray_umath(void);
+extern PyObject *PyInit__pocketfft_internal(void);
+extern PyObject *PyInit__umath_linalg(void);
+extern PyObject *PyInit_lapack_lite(void);
+extern PyObject *PyInit__mt19937(void);
+extern PyObject *PyInit__bounded_integers(void);
+extern PyObject *PyInit__common(void);
+extern PyObject *PyInit__generator(void);
+extern PyObject *PyInit__philox(void);
+extern PyObject *PyInit__pcg64(void);
+extern PyObject *PyInit__sfc64(void);
+extern PyObject *PyInit_mtrand(void);
+
+static void register_numpy_builtins(void) {
+    PyImport_AppendInittab("numpy.core._multiarray_umath",  PyInit__multiarray_umath);
+    PyImport_AppendInittab("numpy.fft._pocketfft_internal", PyInit__pocketfft_internal);
+    PyImport_AppendInittab("numpy.linalg._umath_linalg",    PyInit__umath_linalg);
+    PyImport_AppendInittab("numpy.linalg.lapack_lite",      PyInit_lapack_lite);
+    PyImport_AppendInittab("numpy.random._mt19937",         PyInit__mt19937);
+    PyImport_AppendInittab("numpy.random._bounded_integers",PyInit__bounded_integers);
+    PyImport_AppendInittab("numpy.random._common",          PyInit__common);
+    PyImport_AppendInittab("numpy.random._generator",       PyInit__generator);
+    PyImport_AppendInittab("numpy.random._philox",          PyInit__philox);
+    PyImport_AppendInittab("numpy.random._pcg64",           PyInit__pcg64);
+    PyImport_AppendInittab("numpy.random._sfc64",           PyInit__sfc64);
+    PyImport_AppendInittab("numpy.random.mtrand",           PyInit_mtrand);
+}
+#endif /* HAVE_NUMPY */
 
 /* 4 MiB response buffer – more than enough for any eval result. */
 #define RESP_BUF_SIZE (4 * 1024 * 1024)
@@ -126,6 +168,12 @@ static const char *HANDLER_SRC =
 
 __attribute__((export_name("py_init")))
 void py_init(void) {
+#ifdef HAVE_NUMPY
+    /* Register numpy C extension modules as built-ins BEFORE Py_Initialize().
+     * PyImport_AppendInittab() must be called before the interpreter starts. */
+    register_numpy_builtins();
+#endif
+
     Py_Initialize();
     if (PyRun_SimpleString(HANDLER_SRC) != 0) {
         /*
