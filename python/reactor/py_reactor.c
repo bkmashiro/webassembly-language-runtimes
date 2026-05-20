@@ -79,35 +79,38 @@
 /* ── NumPy built-in module registration ──────────────────────────────────── */
 
 #ifdef HAVE_NUMPY
-/* Forward-declare numpy C extension init functions */
+/*
+ * Only numpy.core, numpy.fft, and numpy.linalg C extensions are registered
+ * as Python built-in modules.  numpy.random C extensions are intentionally
+ * NOT registered here.
+ *
+ * Rationale: The Cython-compiled numpy.random extensions (bit_generator,
+ * _mt19937, mtrand, etc.) call Py_FatalError() → abort() → WASM unreachable
+ * during their PyInit_* functions when run inside the WASI sandbox.  The
+ * exact trigger is Cython's vtable initialisation dereferencing function
+ * pointers that are not valid in the WASI execution environment.
+ *
+ * Instead, all numpy.random.* modules are pre-populated as pure-Python stubs
+ * in initSysPathScript (python_reactor.go) before numpy is imported.  Because
+ * Python's import system checks sys.modules before calling any finder or init
+ * function, the broken C initialisers are never reached.
+ *
+ * numpy.core, numpy.linalg, and numpy.fft work correctly; only the
+ * new-style Generator API (np.random.default_rng, np.random.Generator) is
+ * unavailable.  The legacy np.random functions (seed, rand, randn, …) return
+ * a NotImplementedError with a clear message.
+ */
 extern PyObject *PyInit__multiarray_umath(void);
 extern PyObject *PyInit__pocketfft_internal(void);
 extern PyObject *PyInit__umath_linalg(void);
 extern PyObject *PyInit_lapack_lite(void);
-extern PyObject *PyInit_bit_generator(void);
-extern PyObject *PyInit__mt19937(void);
-extern PyObject *PyInit__bounded_integers(void);
-extern PyObject *PyInit__common(void);
-extern PyObject *PyInit__generator(void);
-extern PyObject *PyInit__philox(void);
-extern PyObject *PyInit__pcg64(void);
-extern PyObject *PyInit__sfc64(void);
-extern PyObject *PyInit_mtrand(void);
 
 static void register_numpy_builtins(void) {
     PyImport_AppendInittab("numpy.core._multiarray_umath",  PyInit__multiarray_umath);
     PyImport_AppendInittab("numpy.fft._pocketfft_internal", PyInit__pocketfft_internal);
     PyImport_AppendInittab("numpy.linalg._umath_linalg",    PyInit__umath_linalg);
     PyImport_AppendInittab("numpy.linalg.lapack_lite",      PyInit_lapack_lite);
-    PyImport_AppendInittab("numpy.random.bit_generator",    PyInit_bit_generator);
-    PyImport_AppendInittab("numpy.random._mt19937",         PyInit__mt19937);
-    PyImport_AppendInittab("numpy.random._bounded_integers",PyInit__bounded_integers);
-    PyImport_AppendInittab("numpy.random._common",          PyInit__common);
-    PyImport_AppendInittab("numpy.random._generator",       PyInit__generator);
-    PyImport_AppendInittab("numpy.random._philox",          PyInit__philox);
-    PyImport_AppendInittab("numpy.random._pcg64",           PyInit__pcg64);
-    PyImport_AppendInittab("numpy.random._sfc64",           PyInit__sfc64);
-    PyImport_AppendInittab("numpy.random.mtrand",           PyInit_mtrand);
+    /* numpy.random.* — stubbed in Python; see python_reactor.go initSysPathScript */
 }
 #endif /* HAVE_NUMPY */
 
