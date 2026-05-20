@@ -84,6 +84,7 @@ extern PyObject *PyInit__multiarray_umath(void);
 extern PyObject *PyInit__pocketfft_internal(void);
 extern PyObject *PyInit__umath_linalg(void);
 extern PyObject *PyInit_lapack_lite(void);
+extern PyObject *PyInit_bit_generator(void);
 extern PyObject *PyInit__mt19937(void);
 extern PyObject *PyInit__bounded_integers(void);
 extern PyObject *PyInit__common(void);
@@ -98,6 +99,7 @@ static void register_numpy_builtins(void) {
     PyImport_AppendInittab("numpy.fft._pocketfft_internal", PyInit__pocketfft_internal);
     PyImport_AppendInittab("numpy.linalg._umath_linalg",    PyInit__umath_linalg);
     PyImport_AppendInittab("numpy.linalg.lapack_lite",      PyInit_lapack_lite);
+    PyImport_AppendInittab("numpy.random.bit_generator",    PyInit_bit_generator);
     PyImport_AppendInittab("numpy.random._mt19937",         PyInit__mt19937);
     PyImport_AppendInittab("numpy.random._bounded_integers",PyInit__bounded_integers);
     PyImport_AppendInittab("numpy.random._common",          PyInit__common);
@@ -185,6 +187,27 @@ static const char *HANDLER_SRC =
     "_sys.meta_path = [_f for _f in _sys.meta_path if _f is not _ilm.PathFinder]\n"
     "_sys.meta_path.append(_WasivfsFinder())\n"
     "_sys.meta_path.append(_ilm.PathFinder)\n"
+    "\n"
+    "# ── Stub numpy test-only C extensions ────────────────────────────────────\n"
+    "# numpy/core/_add_newdocs.py imports test-only extensions\n"
+    "# (e.g. numpy.core._multiarray_tests) to attach docstrings via add_newdoc().\n"
+    "# These are not compiled into the WASI binary.  Stub them BEFORE capturing\n"
+    "# _base_modules so they are treated as 'baseline' and never evicted.\n"
+    "import types as _types\n"
+    "_NUMPY_STUBS = [\n"
+    "    'numpy.core._multiarray_tests',\n"
+    "    'numpy.core._umath_tests',\n"
+    "    'numpy.core._rational_tests',\n"
+    "    'numpy.core._struct_ufunc_tests',\n"
+    "    'numpy.core._operand_flag_tests',\n"
+    "]\n"
+    "for _n in _NUMPY_STUBS:\n"
+    "    if _n not in _sys.modules:\n"
+    "        _m = _types.ModuleType(_n)\n"
+    "        # _add_newdocs.py calls getattr(module, func_name) to attach docstrings.\n"
+    "        # The module has no real functions so __getattr__ returns a dummy callable.\n"
+    "        _m.__getattr__ = lambda _attr: (lambda *_a, **_kw: None)\n"
+    "        _sys.modules[_n] = _m\n"
     "\n"
     "# Capture sys.modules state after stdlib import so we can evict\n"
     "# any modules the user script imports between requests.\n"
