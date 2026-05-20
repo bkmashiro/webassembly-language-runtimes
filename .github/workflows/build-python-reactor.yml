@@ -181,10 +181,13 @@ jobs:
           mkdir -p /tmp/site-packages
           cp -a "${NUMPY_PY_DIR}" /tmp/site-packages/numpy
 
-          # wasi-vfs pack: stdlib at /usr/lib/python3.14, numpy at /usr/lib/python3.14/site-packages/numpy
+          # wasi-vfs pack: stdlib at /usr/lib/python3.14,
+          # site-packages (containing numpy/) at /usr/lib/python3.14/site-packages.
+          # NOTE: mount the whole site-packages dir so the VFS has a directory
+          # entry for it — numpy/ lives inside as a subdirectory.
           wasi-vfs pack python-reactor-nostdlib.wasm \
             --dir "${STDLIB_DIR}"::/usr/lib/python3.14 \
-            --dir /tmp/site-packages/numpy::/usr/lib/python3.14/site-packages/numpy \
+            --dir /tmp/site-packages::/usr/lib/python3.14/site-packages \
             -o python-reactor.wasm
 
           ls -lh python-reactor.wasm
