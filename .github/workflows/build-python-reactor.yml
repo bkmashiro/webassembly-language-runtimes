@@ -19,9 +19,14 @@ name: Build python-reactor.wasm
 on:
   workflow_dispatch:
   push:
+    # Branch pushes: only rebuild when reactor source or this workflow changes.
+    branches:
+      - main
     paths:
       - 'python/reactor/**'
       - '.github/workflows/build-python-reactor.yml'
+    # Tag pushes always trigger a full build + release (no paths filter).
+    # auto-tag-reactor.yml creates tags automatically on relevant changes.
     tags:
       - 'v*'
 
