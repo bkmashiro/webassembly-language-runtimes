@@ -96,6 +96,12 @@ jobs:
           tar xf numpy-static-wasi.tar.gz -C numpy-static --strip-components=1
           echo "NUMPY_STATIC=$(pwd)/numpy-static" >> $GITHUB_ENV
 
+      - name: Install sympy (pure Python — packed via wasi-vfs)
+        run: |
+          pip install sympy --target /tmp/extra-site --no-deps -q
+          echo "sympy installed:"
+          ls /tmp/extra-site/
+
       - name: Inspect layout
         run: |
           echo "=== cpython-wasi layout (depth 3) ==="
@@ -179,14 +185,20 @@ jobs:
           echo "Numpy pure Python dir: ${NUMPY_PY_DIR}"
           test -d "${NUMPY_PY_DIR}" || (echo "ERROR: numpy pure Python not found"; find numpy-static -type d; exit 1)
 
-          # Build site-packages dir with numpy
+          # Build site-packages dir: numpy + sympy (pure Python)
           mkdir -p /tmp/site-packages
           cp -a "${NUMPY_PY_DIR}" /tmp/site-packages/numpy
+          # sympy was installed via pip to /tmp/extra-site; copy the package dir.
+          if [ -d /tmp/extra-site/sympy ]; then
+            cp -a /tmp/extra-site/sympy /tmp/site-packages/sympy
+            echo "sympy packed: $(du -sh /tmp/site-packages/sympy | cut -f1)"
+          else
+            echo "WARNING: sympy not found in /tmp/extra-site — skipping"
+          fi
+          ls /tmp/site-packages/
 
           # wasi-vfs pack: stdlib at /usr/lib/python3.14,
-          # site-packages (containing numpy/) at /usr/lib/python3.14/site-packages.
-          # NOTE: mount the whole site-packages dir so the VFS has a directory
-          # entry for it — numpy/ lives inside as a subdirectory.
+          # site-packages (numpy + sympy) at /usr/lib/python3.14/site-packages.
           wasi-vfs pack python-reactor-nostdlib.wasm \
             --dir "${STDLIB_DIR}"::/usr/lib/python3.14 \
             --dir /tmp/site-packages::/usr/lib/python3.14/site-packages \
