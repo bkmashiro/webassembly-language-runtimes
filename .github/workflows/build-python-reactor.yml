@@ -155,6 +155,8 @@ jobs:
             -lwasi-emulated-getpid \
             -lwasi-emulated-signal \
             -lwasi-emulated-process-clocks \
+            -Wl,--wrap=strtold \
+            -Wl,--wrap=strtold_l \
             -Wl,--allow-undefined \
             -Wl,--export=py_init \
             -Wl,--export=py_exec \

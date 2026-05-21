@@ -75,6 +75,30 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <locale.h>
+
+/* ── long double shims ───────────────────────────────────────────────────────
+ *
+ * WASI SDK 33 does not support long double arithmetic: its strtold() and
+ * strtold_l() implementations call long_double_not_supported() → abort()
+ * → WASM unreachable.  NumPy calls NumPyOS_ascii_strtold() during module
+ * initialisation (e.g. when building the LONGDOUBLE dtype constants), which
+ * triggers the crash.
+ *
+ * Fix: intercept strtold / strtold_l with --wrap=strtold / --wrap=strtold_l
+ * at link time (added to the clang invocation in build-python-reactor.yml).
+ * The wrappers delegate to strtod() and cast the result to long double.
+ * Precision is capped at 64-bit double — acceptable because WASM32 has no
+ * native 80-bit or 128-bit float support anyway.
+ */
+long double __wrap_strtold(const char *str, char **end) {
+    return (long double)strtod(str, end);
+}
+
+long double __wrap_strtold_l(const char *str, char **end, locale_t loc) {
+    (void)loc;
+    return (long double)strtod(str, end);
+}
 
 /* ── NumPy built-in module registration ──────────────────────────────────── */
 
