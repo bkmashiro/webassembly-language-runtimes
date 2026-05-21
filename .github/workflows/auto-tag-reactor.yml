@@ -1,0 +1,60 @@
+# .github/workflows/auto-tag-reactor.yml
+#
+# Automatically creates a new semver tag whenever py_reactor.c or the build
+# workflow changes on the main branch. The tag triggers build-python-reactor.yml
+# which builds and publishes a new python-reactor.wasm release.
+#
+# Version bumping strategy: patch increment (v1.0.X → v1.0.X+1).
+# To do a minor or major bump, create the tag manually.
+
+name: Auto-tag python-reactor on change
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'python/reactor/**'
+      - '.github/workflows/build-python-reactor.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  auto-tag:
+    name: Bump patch version and tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute next patch version
+        id: version
+        run: |
+          # Find the latest vX.Y.Z tag; default to v1.0.0 if none exists.
+          LATEST=$(git tag --list 'v*' --sort=-version:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            NEXT="v1.0.0"
+          else
+            # Split into components and increment the patch number.
+            MAJOR=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
+            MINOR=$(echo "$LATEST" | cut -d. -f2)
+            PATCH=$(echo "$LATEST" | cut -d. -f3)
+            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "next=${NEXT}"     >> "$GITHUB_OUTPUT"
+          echo "Latest tag: ${LATEST}, next: ${NEXT}"
+
+      - name: Create and push tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.version.outputs.next }}" \
+            -m "Auto-tag: python-reactor.wasm ${{ steps.version.outputs.next }}"
+          git push origin "${{ steps.version.outputs.next }}"
+          echo "Tagged ${{ steps.version.outputs.next }}"
